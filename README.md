@@ -44,7 +44,7 @@ Proportion étonnamment **stable dans le temps** (~44–48 %), sans tendance net
 *Part des événements d'origine humaine et naturelle, par année.*
 
 ### 📊 Outliers statistiques
-**1 272 événements** dépassent le seuil statistique (méthode IQR) sur la surface brûlée. L'événement le plus extrême (USA, juillet 2025, ~39 M ha) dépasse la superficie de l'Allemagne pour un seul incendie — à vérifier s'il s'agit d'une anomalie de saisie plutôt que d'un événement réel.
+**1 272 événements** dépassent le seuil statistique (méthode IQR) sur la surface brûlée. L'événement le plus extrême (USA, juillet 2025, ~39 M ha) dépasse la superficie de l'Allemagne pour un seul incendie — incertitude sur la nature erronée de la donnée?
 
 ![Sécheresse vs surface brûlée](./Graphs/06_secheresse_vs_surface.png)
 *Relation entre indice de sécheresse et surface brûlée ; les points larges sont les outliers IQR.*
