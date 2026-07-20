@@ -1,0 +1,393 @@
+"""
+================================================================================
+ANALYSE DES INCENDIES DE FORÊT (WILDFIRES) 2001-2026
+================================================================================
+
+Structure des 4 fichiers :
+  - annual_global_summary.csv : 1 ligne par année (2001-2026), agrégats globaux
+  - country_summary.csv       : 1 ligne par pays, agrégats sur toute la période
+  - regional_seasonality.csv  : 1 ligne par (région x mois), saisonnalité
+  - wildfire_events.csv       : 1 ligne par événement (9277 événements),
+                                 le niveau le plus fin -> utile pour repérer
+                                 les outliers et les corrélations
+================================================================================
+"""
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
+import seaborn as sns
+
+
+# ------------------------------------------------------------------------
+# Configuration graphique globale
+# ------------------------------------------------------------------------
+# On fixe un style cohérent pour tous les graphiques (fond clair, grille
+# légère) plutôt que de laisser les réglages par défaut de matplotlib.
+
+sns.set_theme(style="whitegrid", context="talk")
+plt.rcParams["figure.dpi"] = 110
+plt.rcParams["savefig.dpi"] = 150
+plt.rcParams["axes.titleweight"] = "bold"
+plt.rcParams["axes.titlesize"] = 15
+
+OUTPUT_DIR = "/mnt/user-data/outputs"
+DATA_DIR = "/mnt/user-data/uploads"
+
+
+# Palette de couleurs cohérente réutilisée dans plusieurs graphiques
+
+COLOR_MAIN = "#d1495b"      # rouge-brique (incendie)
+COLOR_SECOND = "#3d5a80"    # bleu-gris (contraste)
+COLOR_ACCENT = "#f4a259"    # orange (accent)
+SEVERITY_ORDER = ["Low", "Moderate", "High", "Extreme"]
+SEVERITY_PALETTE = {"Low": "#8ecae6", "Moderate": "#f4a259",
+                     "High": "#e07a5f", "Extreme": "#9d0208"}
+SEASON_ORDER = ["Winter", "Spring", "Summer", "Autumn"]
+
+# ------------------------------------------------------------------------
+# 1) CHARGEMENT DES DONNEES
+# ------------------------------------------------------------------------
+
+annual = pd.read_csv(f"{DATA_DIR}/annual_global_summary.csv")
+countries = pd.read_csv(f"{DATA_DIR}/country_summary.csv")
+seasonality = pd.read_csv(f"{DATA_DIR}/regional_seasonality.csv")
+events = pd.read_csv(f"{DATA_DIR}/wildfire_events.csv", parse_dates=["date"])
+
+
+# ------------------------------------------------------------------------
+# 2) NETTOYAGE / PREPARATION
+# ------------------------------------------------------------------------
+
+# a) Le fichier "events" contient une colonne "date" -> on en dérive des
+#    variables utiles (déjà présentes en partie : year, month...). On
+#    s'assure simplement des bons types.
+
+events["severity"] = pd.Categorical(events["severity"], categories=SEVERITY_ORDER,
+                                     ordered=True)
+events["season"] = pd.Categorical(events["season"], categories=SEASON_ORDER,
+                                   ordered=True)
+events["human_caused_label"] = events["human_caused"].map({1: "Origine humaine",
+                                                             0: "Origine naturelle"})
+
+
+# b) 2026 est une année INCOMPLETE (les données s'arrêtent à la date du jour,
+#    13 juillet 2026). On le signale car cela peut fausser la lecture des
+#    tendances si on ne le précise pas sur les graphiques temporels.
+
+LAST_FULL_YEAR = 2025
+INCOMPLETE_YEAR = 2026
+
+
+# c) Détection des outliers au niveau événement, sur la surface brûlée
+#    (méthode IQR - interquartile range), pour les mettre en évidence sur
+#    un graphique dédié.
+
+q1, q3 = events["burn_area_hectares"].quantile([0.25, 0.75])
+iqr = q3 - q1
+outlier_threshold = q3 + 1.5 * iqr
+events["is_outlier"] = events["burn_area_hectares"] > outlier_threshold
+
+print(f"Événements chargés : {len(events)}")
+print(f"Seuil outlier (surface brûlée) : {outlier_threshold:,.0f} ha")
+print(f"Nombre d'événements outliers : {events['is_outlier'].sum()}")
+
+
+# ==========================================================================
+# GRAPHIQUE 1 — Évolution annuelle : nombre d'événements vs surface brûlée
+# ==========================================================================
+
+# Objectif : montrer la tendance de fond (hausse progressive) et les pics
+# ponctuels (2003, 2009, 2019-2021, 2025) sur un même graphique à deux axes,
+# car "nombre d'événements" et "surface brûlée" ne racontent pas exactement
+# la même histoire (peu d'événements mais très étendus, ou l'inverse).
+
+fig, ax1 = plt.subplots(figsize=(13, 6))
+
+ax1.bar(annual["year"], annual["total_events"], color=COLOR_SECOND, alpha=0.75,
+        label="Nombre d'événements")
+ax1.set_ylabel("Nombre d'événements", color=COLOR_SECOND, fontweight="bold")
+ax1.tick_params(axis="y", labelcolor=COLOR_SECOND)
+ax1.set_xlabel("Année")
+
+ax2 = ax1.twinx()
+ax2.plot(annual["year"], annual["total_burn_area_km2"], color=COLOR_MAIN,
+         marker="o", linewidth=2.5, label="Surface brûlée (km²)")
+ax2.set_ylabel("Surface brûlée (km²)", color=COLOR_MAIN, fontweight="bold")
+ax2.tick_params(axis="y", labelcolor=COLOR_MAIN)
+ax2.grid(False)
+
+
+# On grise l'année 2026 car elle est incomplète (données jusqu'à juillet
+# 2026 seulement) pour éviter une mauvaise lecture ("baisse" en 2026 alors
+# qu'il s'agit juste d'une année tronquée).
+
+ax1.axvspan(INCOMPLETE_YEAR - 0.5, INCOMPLETE_YEAR + 0.5, color="grey", alpha=0.15)
+ax1.annotate("2026 : année\nincomplète", xy=(2026, ax1.get_ylim()[1]*0.9),
+             ha="center", fontsize=10, style="italic", color="dimgrey")
+
+
+# Annotation des pics majeurs identifiés dans les données
+
+for yr, label in [(2009, "Pic Australie/global"), (2019, "'Black Summer'\n+ Amazonie"),
+                   (2025, "Pic record")]:
+    val = annual.loc[annual.year == yr, "total_burn_area_km2"].values[0]
+    ax2.annotate(label, xy=(yr, val), xytext=(yr, val + 150000),
+                 ha="center", fontsize=9.5, color=COLOR_MAIN,
+                 arrowprops=dict(arrowstyle="->", color=COLOR_MAIN, alpha=0.7))
+
+ax1.set_title("Évolution 2001-2026 : nombre d'incendies vs surface totale brûlée")
+lines1, labels1 = ax1.get_legend_handles_labels()
+lines2, labels2 = ax2.get_legend_handles_labels()
+ax1.legend(lines1 + lines2, labels1 + labels2, loc="upper left", framealpha=0.9)
+fig.tight_layout()
+fig.savefig(f"{OUTPUT_DIR}/01_evolution_annuelle.png")
+plt.close(fig)
+
+
+# ==========================================================================
+# GRAPHIQUE 2 — Top 12 pays par surface brûlée totale (avec % origine humaine)
+# ==========================================================================
+
+# Objectif : identifier les pays les plus touchés en valeur absolue, et
+# superposer un second indicateur (part d'origine humaine) via la couleur,
+# pour voir si les plus gros contributeurs sont plutôt "naturels" ou "humains".
+
+top_countries = countries.sort_values("total_burn_area_ha", ascending=False).head(12)
+
+fig, ax = plt.subplots(figsize=(11, 7))
+norm = plt.Normalize(countries["pct_human_caused"].min(), countries["pct_human_caused"].max())
+cmap = sns.color_palette("YlOrRd", as_cmap=True)
+colors = cmap(norm(top_countries["pct_human_caused"]))
+
+bars = ax.barh(top_countries["country"], top_countries["total_burn_area_ha"] / 1e6,
+                color=colors, edgecolor="white")
+ax.invert_yaxis()  # le plus gros pays en haut
+ax.set_xlabel("Surface brûlée totale (millions d'hectares, 2001-2026)")
+ax.set_title("Top 12 des pays les plus touchés\n(couleur = % d'incendies d'origine humaine)")
+
+
+# Barre de couleur (légende du % origine humaine)
+
+sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+sm.set_array([])
+cbar = fig.colorbar(sm, ax=ax, pad=0.02)
+cbar.set_label("% origine humaine", rotation=270, labelpad=18)
+cbar.ax.yaxis.set_major_formatter(mticker.PercentFormatter(xmax=1))
+
+# Étiquettes de valeur au bout de chaque barre
+for bar, val in zip(bars, top_countries["total_burn_area_ha"] / 1e6):
+    ax.text(val + 0.5, bar.get_y() + bar.get_height() / 2, f"{val:.1f} M ha",
+            va="center", fontsize=10)
+
+fig.tight_layout()
+fig.savefig(f"{OUTPUT_DIR}/02_top_pays.png")
+plt.close(fig)
+
+
+# ==========================================================================
+# GRAPHIQUE 3 — Saisonnalité : nombre d'événements par mois et par continent
+# ==========================================================================
+
+# Objectif : mettre en évidence le décalage de saison des feux entre
+# hémisphère nord et hémisphère sud (ex : l'Australie brûle l'été austral,
+# décembre-mars, quand l'Europe/Amérique du Nord brûlent juin-septembre).
+# On utilise le fichier "regional_seasonality" agrégé par région/mois, que
+# l'on ré-agrège ici par continent (via les events pour retrouver le mapping
+# région -> continent).
+
+region_to_continent = events[["region_id", "continent"]].drop_duplicates()
+seas_cont = seasonality.merge(region_to_continent, on="region_id", how="left")
+pivot_seas = seas_cont.pivot_table(index="continent", columns="month",
+                                    values="events", aggfunc="sum", fill_value=0)
+
+
+# On normalise chaque ligne (continent) en % du total du continent, afin de
+# comparer des continents dont le volume total d'événements diffère
+# fortement (ex: l'Australie a moins d'événements en absolu qu'Amérique Nord)
+
+pivot_seas_pct = pivot_seas.div(pivot_seas.sum(axis=1), axis=0) * 100
+
+fig, ax = plt.subplots(figsize=(12, 6))
+sns.heatmap(pivot_seas_pct, cmap="YlOrRd", annot=True, fmt=".0f", cbar_kws={
+            "label": "% des événements annuels du continent"}, ax=ax,
+            linewidths=0.5, linecolor="white")
+ax.set_xlabel("Mois")
+ax.set_ylabel("")
+ax.set_title("Saisonnalité des incendies par continent\n(% des événements de l'année, par mois)")
+month_labels = ["Jan", "Fév", "Mar", "Avr", "Mai", "Jun", "Jul", "Aoû", "Sep", "Oct", "Nov", "Déc"]
+ax.set_xticklabels([month_labels[int(m) - 1] for m in pivot_seas_pct.columns], rotation=0)
+fig.tight_layout()
+fig.savefig(f"{OUTPUT_DIR}/03_saisonnalite_continent.png")
+plt.close(fig)
+
+
+# ==========================================================================
+# GRAPHIQUE 4 — Distribution de la puissance radiative du feu (FRP) par
+#                continent : boxplot en échelle log pour visualiser les
+#                outliers extrêmes
+# ==========================================================================
+
+# Objectif : la FRP (fire_radiative_power_mw) a une distribution très
+# asymétrique (cf. describe() : médiane ~474 mais max ~99 830). Un boxplot
+# en échelle log est le bon outil pour comparer les continents ET repérer
+# les événements extrêmes (points au-dessus des moustaches).
+
+order_cont = (events.groupby("continent")["fire_radiative_power_mw"]
+              .median().sort_values(ascending=False).index)
+
+fig, ax = plt.subplots(figsize=(12, 7))
+sns.boxplot(data=events, x="continent", y="fire_radiative_power_mw", order=order_cont,
+            color=COLOR_ACCENT, showfliers=True,
+            flierprops=dict(marker="o", markersize=3.5, markerfacecolor=COLOR_MAIN,
+                             markeredgecolor="none", alpha=0.5), ax=ax)
+ax.set_yscale("log")
+ax.set_ylabel("Puissance radiative du feu - FRP (MW, échelle log)")
+ax.set_xlabel("")
+ax.set_title("Intensité des incendies par continent\n(points = événements extrêmes / outliers)", pad=14)
+ax.tick_params(axis="x", rotation=20)
+fig.tight_layout()
+fig.savefig(f"{OUTPUT_DIR}/04_frp_par_continent.png")
+plt.close(fig)
+
+
+# ==========================================================================
+# GRAPHIQUE 5 — Évolution de la part des feux d'origine humaine vs naturelle
+# ==========================================================================
+
+# Objectif : voir si la proportion "origine humaine / naturelle" évolue dans
+# le temps (utile pour distinguer un effet "changement climatique" -> plus
+# de feux naturels dus à la sécheresse, d'un effet "pression humaine").
+# On exclut 2026 (incomplète) de la lecture de tendance mais on l'affiche
+# quand même en la distinguant visuellement.
+
+human_by_year = (events.groupby(["year", "human_caused_label"], observed=True)
+                  .size().unstack(fill_value=0))
+human_by_year_pct = human_by_year.div(human_by_year.sum(axis=1), axis=0) * 100
+
+fig, ax = plt.subplots(figsize=(13, 6))
+ax.stackplot(human_by_year_pct.index,
+             human_by_year_pct["Origine naturelle"],
+             human_by_year_pct["Origine humaine"],
+             labels=["Origine naturelle", "Origine humaine"],
+             colors=[COLOR_SECOND, COLOR_MAIN], alpha=0.85)
+ax.axhline(50, color="white", linestyle="--", linewidth=1)
+ax.axvspan(INCOMPLETE_YEAR - 0.5, INCOMPLETE_YEAR + 0.5, color="white", alpha=0.25,
+           hatch="//")
+ax.set_xlim(annual["year"].min(), annual["year"].max())
+ax.set_ylim(0, 100)
+ax.set_ylabel("% des événements de l'année")
+ax.set_xlabel("Année")
+ax.set_title("Origine humaine vs naturelle des incendies (2001-2026)")
+ax.legend(loc="lower left", framealpha=0.9)
+fig.tight_layout()
+fig.savefig(f"{OUTPUT_DIR}/05_origine_humaine_naturelle.png")
+plt.close(fig)
+
+
+# ==========================================================================
+# GRAPHIQUE 6 — Sécheresse (drought index) vs surface brûlée, avec mise en
+#                évidence des outliers et de la sévérité
+# ==========================================================================
+
+# Objectif : tester visuellement la relation entre l'indice de sécheresse
+# et l'ampleur de l'incendie, et repérer les événements qui sortent
+# largement du nuage de points (potentiels outliers déjà détectés par IQR).
+# On échantillonne pour la lisibilité (9277 points sinon illisibles) mais
+# on force l'inclusion de TOUS les outliers pour ne pas les perdre.
+
+np.random.seed(42)
+non_outliers = events[~events["is_outlier"]].sample(n=1500, random_state=42)
+plot_sample = pd.concat([non_outliers, events[events["is_outlier"]]])
+
+fig, ax = plt.subplots(figsize=(11, 7))
+sns.scatterplot(data=plot_sample, x="drought_index", y="burn_area_hectares",
+                 hue="severity", palette=SEVERITY_PALETTE, hue_order=SEVERITY_ORDER,
+                 size="is_outlier", sizes={True: 90, False: 25},
+                 alpha=0.6, edgecolor="none", ax=ax, legend="brief")
+ax.set_yscale("log")
+ax.set_xlabel("Indice de sécheresse (0 = humide, 1 = sécheresse extrême)")
+ax.set_ylabel("Surface brûlée (ha, échelle log)")
+ax.set_title("Sécheresse vs surface brûlée\n(points larges = outliers statistiques, méthode IQR)")
+ax.axhline(outlier_threshold, color="black", linestyle=":", linewidth=1, alpha=0.6)
+ax.annotate(f"Seuil outlier IQR : {outlier_threshold:,.0f} ha", xy=(0.02, outlier_threshold),
+            xytext=(0.02, outlier_threshold * 2.2), fontsize=9, color="black")
+
+handles, labels = ax.get_legend_handles_labels()
+ax.legend(handles, labels, bbox_to_anchor=(1.02, 1), loc="upper left", borderaxespad=0)
+fig.tight_layout()
+fig.savefig(f"{OUTPUT_DIR}/06_secheresse_vs_surface.png")
+plt.close(fig)
+
+
+# ==========================================================================
+# GRAPHIQUE 7 — Émissions moyennes de CO2 par type de végétation (top 12)
+# ==========================================================================
+
+# Objectif : identifier quels écosystèmes génèrent, en moyenne PAR ÉVÉNEMENT,
+# le plus d'émissions de CO2 -- utile pour distinguer "beaucoup de petits
+# feux" de "peu de feux mais très émetteurs" selon la végétation.
+
+veg_stats = (events.groupby("vegetation_type")
+             .agg(nb_events=("event_id", "count"),
+                  co2_moyen=("co2_emissions_tonnes", "mean"))
+             .query("nb_events >= 30")  # on exclut les catégories trop rares (peu fiables)
+             .sort_values("co2_moyen", ascending=False).head(12))
+
+fig, ax = plt.subplots(figsize=(11, 7))
+bars = ax.barh(veg_stats.index, veg_stats["co2_moyen"], color=COLOR_ACCENT, edgecolor="white")
+ax.invert_yaxis()
+ax.set_xlabel("Émissions moyennes de CO2 par événement (tonnes)")
+ax.set_title("Types de végétation les plus émetteurs de CO2\n(en moyenne par incendie, catégories avec ≥ 30 événements)")
+
+for bar, (n, v) in zip(bars, zip(veg_stats["nb_events"], veg_stats["co2_moyen"])):
+    ax.text(v + v * 0.01, bar.get_y() + bar.get_height() / 2, f"n={n}",
+            va="center", fontsize=9.5, color="dimgrey")
+
+fig.tight_layout()
+fig.savefig(f"{OUTPUT_DIR}/07_co2_par_vegetation.png")
+plt.close(fig)
+
+
+# ==========================================================================
+# GRAPHIQUE 8 — Les 15 événements les plus extrêmes (surface brûlée)
+# ==========================================================================
+
+# Objectif : lister nommément les outliers les plus marquants (pays, année,
+# surface) plutôt que de les laisser anonymes dans le nuage de points du
+# graphique 6. Utile pour un rapport factuel ("quels sont les records ?").
+
+top_events = events.nlargest(15, "burn_area_hectares")[
+    ["date", "country", "region_name", "burn_area_hectares", "severity"]].copy()
+
+
+# On inclut le jour exact (pas seulement année-mois) pour garantir des
+# libellés uniques : deux gros incendies dans le même pays le même mois
+# auraient sinon le même label et matplotlib superposerait leurs barres.
+
+top_events["label"] = top_events["country"] + " (" + top_events["date"].dt.strftime("%Y-%m-%d") + ")"
+top_events = top_events.sort_values("burn_area_hectares").reset_index(drop=True)
+
+fig, ax = plt.subplots(figsize=(11, 8))
+y_pos = np.arange(len(top_events))
+colors = [SEVERITY_PALETTE[s] for s in top_events["severity"]]
+bars = ax.barh(y_pos, top_events["burn_area_hectares"] / 1e6, color=colors, edgecolor="white")
+ax.set_yticks(y_pos)
+ax.set_yticklabels(top_events["label"])
+ax.set_xlabel("Surface brûlée (millions d'hectares)")
+ax.set_title("Les 15 incendies les plus étendus enregistrés (2001-2026)")
+for y, val in zip(y_pos, top_events["burn_area_hectares"] / 1e6):
+    ax.text(val + 0.5, y, f"{val:.2f} M ha", va="center", fontsize=9.5)
+ax.set_xlim(0, top_events["burn_area_hectares"].max() / 1e6 * 1.15)
+
+
+# Légende manuelle pour la couleur = sévérité
+
+from matplotlib.patches import Patch
+handles = [Patch(facecolor=SEVERITY_PALETTE[s], label=s) for s in SEVERITY_ORDER
+           if s in top_events["severity"].unique()]
+ax.legend(handles=handles, title="Sévérité", loc="lower right")
+fig.tight_layout()
+fig.savefig(f"{OUTPUT_DIR}/08_top15_evenements_extremes.png")
+plt.close(fig)
